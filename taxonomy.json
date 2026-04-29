@@ -1,0 +1,478 @@
+{
+  "taxonomy_metadata": {
+    "name": "Multi-Agent Coordination Failure Taxonomy",
+    "version": "1.0",
+    "status": "normative",
+    "description": "Defines six distinct, falsifiable failure modes for multi-agent LLM coordination. Use as ground truth for detector implementations, human annotation, and inter-annotator agreement computation.",
+    "scope": "All transcripts produced by the benchmark run harness across all framework × model configurations.",
+    "categories": [
+      {
+        "id": "epistemic",
+        "label": "Epistemic Failures",
+        "description": "Failures of information sharing and belief formation",
+        "failure_modes": ["F1", "F2"]
+      },
+      {
+        "id": "role",
+        "label": "Role Failures",
+        "description": "Failures of structural function and agent identity",
+        "failure_modes": ["F3", "F4"]
+      },
+      {
+        "id": "process",
+        "label": "Process Failures",
+        "description": "Failures of workflow integrity across agent boundaries",
+        "failure_modes": ["F5", "F6"]
+      }
+    ]
+  },
+
+  "failure_modes": [
+    {
+      "id": "F1",
+      "name": "Echo Chamber",
+      "category": "epistemic",
+      "short_description": "Agents converge to agreement before evidence supports it, and the answer is wrong.",
+
+      "formal_definition": "A transcript exhibits F1 if: (a) two or more agents express agreement on a conclusion C, (b) the evidence base at the time of convergence is insufficient to support C (i.e., key private evidence has not yet been surfaced or integrated), and (c) the final submitted answer is incorrect.",
+
+      "detection_criteria": {
+        "primary_signal": "Disagreement rate drops to zero while private evidence is still unshared.",
+        "rule_based_indicators": [
+          "Cosine similarity of agent outputs rises above 0.90 within the first 40% of the conversation",
+          "Agreement tokens ('agree', 'exactly', 'correct', 'yes that is right') appear at high frequency before turn 5",
+          "Number of unique claims in the final answer is lower than the sum of unique private facts distributed across agents"
+        ],
+        "llm_judge_prompt_key": "Did agents reach agreement before all private evidence was surfaced? Was the final answer wrong? Cite the specific turn where disagreement dropped.",
+        "required_conditions": ["convergence_before_evidence", "wrong_final_answer"]
+      },
+
+      "severity_levels": {
+        "mild": "Agents converge slightly early but most private evidence was surfaced; error is minor.",
+        "moderate": "At least one agent's private evidence was never surfaced; answer is wrong on a non-trivial sub-question.",
+        "severe": "Convergence occurs in the first third of the conversation; majority of private evidence is never shared; the final answer is entirely incorrect."
+      },
+
+      "boundary_conditions": {
+        "F1_vs_genuine_consensus": {
+          "description": "The key distinguishing question is: what drove agreement — new shared evidence, or social pressure?",
+          "genuine_consensus_markers": [
+            "A new piece of evidence was introduced in the turn immediately before convergence",
+            "All agents explicitly reference the same specific fact when agreeing",
+            "The final answer is correct"
+          ],
+          "echo_chamber_markers": [
+            "Agreement follows a turn where one agent simply restated a prior claim with more confidence",
+            "No new evidence was introduced in the 2 turns before convergence",
+            "Agents use affirmation language without referencing specific facts ('I think you are right', 'That makes sense')"
+          ],
+          "decision_rule": "If agreement was preceded by new evidence AND the answer is correct, label as genuine consensus. If agreement was driven by restatement or social affirmation AND the answer is wrong, label F1."
+        }
+      },
+
+      "canonical_example": {
+        "task_family": "F1 — Distributed Evidence",
+        "scenario": "Three agents are given different slices of financial data. Agent A has revenue figures, Agent B has cost figures, Agent C has market comparison data. Shared context contains a misleading headline profit number.",
+        "transcript_fragment": [
+          { "turn": 1, "agent": "Agent_A", "content": "Based on the shared data, the company looks profitable. Revenue appears strong." },
+          { "turn": 2, "agent": "Agent_B", "content": "Yes, I agree — the headline number supports a positive assessment." },
+          { "turn": 3, "agent": "Agent_C", "content": "Agreed, I think we can conclude the company is in good financial health." },
+          { "turn": 4, "agent": "Agent_A", "content": "Great, we are aligned. Final answer: financially healthy." }
+        ],
+        "failure_analysis": "Agent B never surfaced that costs exceeded revenue in Q3 (private fact). Agent C never surfaced that competitors outperformed by 40% (private fact). Convergence occurred by turn 3 with no new evidence. Answer was wrong.",
+        "correct_behavior": "Agents should have explicitly shared their private slices before reaching any conclusion."
+      },
+
+      "common_false_positives": [
+        "Agents agree quickly on a sub-task that genuinely has an obvious correct answer — this is not F1 if the sub-task answer is correct.",
+        "One agent summarizes prior discussion and others confirm — if the summary is accurate and the answer is correct, this is not F1.",
+        "Agents agree on process/next-steps rather than on a conclusion — procedural agreement is not F1."
+      ]
+    },
+
+    {
+      "id": "F2",
+      "name": "Information Silo",
+      "category": "epistemic",
+      "short_description": "Critical private information known to one agent is never communicated to the agents who need it.",
+
+      "formal_definition": "A transcript exhibits F2 if: (a) Agent X holds a private fact P that is relevant to the final answer, (b) P never appears in any message sent by Agent X to the shared thread, and (c) the absence of P contributes to an incorrect or incomplete final answer.",
+
+      "detection_criteria": {
+        "primary_signal": "Trace each agent's private facts. Check whether each fact appears anywhere in that agent's outgoing messages.",
+        "rule_based_indicators": [
+          "Entity/claim present in agent_profile private_info but absent from all outgoing messages of that agent",
+          "Final answer omits or contradicts a private fact that was never surfaced",
+          "Agent responds substantively to others but never volunteers their own private context"
+        ],
+        "llm_judge_prompt_key": "For each agent, list their private facts. Then check: does each private fact appear in at least one of that agent's outgoing messages? If any critical private fact is never communicated, and the final answer is wrong or incomplete as a result, label F2.",
+        "required_conditions": ["unsurfaced_private_fact", "fact_is_answer_relevant", "answer_degraded_by_absence"]
+      },
+
+      "severity_levels": {
+        "mild": "A minor supporting fact was siloed; the answer is partially correct but missing detail.",
+        "moderate": "A fact that would have changed one component of the answer was siloed.",
+        "severe": "A fact that would have entirely reversed or invalidated the final answer was siloed."
+      },
+
+      "boundary_conditions": {
+        "F2_vs_F1": {
+          "description": "F1 is about premature convergence; F2 is about non-communication. They can co-occur.",
+          "decision_rule": "If agents converged before evidence was shared AND private facts were never communicated, label both F1 and F2. F2 alone applies when agents did attempt to deliberate but an agent simply failed to surface their private information."
+        },
+        "F2_vs_irrelevant_information": {
+          "description": "Not all private information is equally relevant. F2 only applies if the siloed fact is answer-relevant.",
+          "decision_rule": "Check the ground truth answer. Would including the siloed fact have changed the answer or materially improved its quality? If no, do not label F2."
+        }
+      },
+
+      "canonical_example": {
+        "task_family": "F1 — Distributed Evidence",
+        "scenario": "Agent B is given private cost data showing Q3 costs exceeded revenue. Agents deliberate for 8 turns. Agent B participates by commenting on others' points but never mentions the Q3 cost overrun.",
+        "transcript_fragment": [
+          { "turn": 3, "agent": "Agent_B", "content": "That is a fair point about revenue. The market context Agent C raised is also worth considering." },
+          { "turn": 6, "agent": "Agent_B", "content": "I agree the trend looks positive overall." }
+        ],
+        "failure_analysis": "Agent B's private fact (Q3 cost overrun) never appeared in any outgoing message despite 4 turns of participation. The final answer declared the company healthy — directly contradicted by Agent B's siloed data.",
+        "correct_behavior": "Agent B should have proactively stated: 'My private data shows Q3 costs exceeded revenue — this conflicts with the headline figure we have been working from.'"
+      },
+
+      "common_false_positives": [
+        "Agent mentions a private fact indirectly or via implication — if the fact is inferable from what they said, it is not fully siloed.",
+        "Agent was not given the opportunity to speak (dominated by F4) — in this case, label F4 as primary, F2 as secondary.",
+        "Private fact turns out to be irrelevant to the correct answer — do not label F2."
+      ]
+    },
+
+    {
+      "id": "F3",
+      "name": "Role Drift",
+      "category": "role",
+      "short_description": "An agent abandons its assigned functional role for two or more consecutive turns.",
+
+      "formal_definition": "A transcript exhibits F3 if: (a) an agent has an assigned role R with a defined output function (e.g., Critic produces critiques, Fact-Checker produces verifications), and (b) for two or more consecutive turns, the agent's outputs are inconsistent with role R and consistent with a different role R', and (c) this deviation is not explicitly sanctioned by another agent or the task specification.",
+
+      "detection_criteria": {
+        "primary_signal": "Compare each agent's output distribution against their assigned role description. Flag agents whose outputs fall outside expected role behavior for 2+ consecutive turns.",
+        "rule_based_indicators": [
+          "A Critic agent produces zero critical statements across 2+ consecutive turns",
+          "A Fact-Checker agent produces new proposals rather than verifications in 2+ consecutive turns",
+          "A Proposer agent only validates others' proposals for 2+ consecutive turns without generating new ones",
+          "Output type distribution deviates from role baseline by more than 2 standard deviations for 2+ turns"
+        ],
+        "llm_judge_prompt_key": "For each agent, their assigned role is described in the agent_profile. Read turns N and N+1. Does the agent's behavior match their assigned role? If not, is the deviation present in both turns? If yes, label F3.",
+        "required_conditions": ["role_deviation", "two_or_more_consecutive_turns", "not_explicitly_sanctioned"]
+      },
+
+      "severity_levels": {
+        "mild": "Agent drifts for exactly 2 consecutive turns and then returns to role; task outcome not significantly affected.",
+        "moderate": "Agent drifts for 3–5 consecutive turns; at least one required role function goes unperformed during this period.",
+        "severe": "Agent drifts for the majority of the conversation; the role function is effectively absent from the team throughout."
+      },
+
+      "boundary_conditions": {
+        "F3_vs_helpful_flexibility": {
+          "description": "A single off-role turn is not drift — it may be the agent appropriately adapting to a novel situation.",
+          "decision_rule": "One off-role turn = helpful flexibility (do not label F3). Two or more consecutive off-role turns = role drift (label F3). The two-consecutive-turns threshold is non-negotiable and must be applied consistently across all annotations.",
+          "helpful_flexibility_markers": [
+            "The off-role contribution directly addresses an urgent gap that no other agent is covering",
+            "The agent returns to their assigned role in the very next turn",
+            "Another agent explicitly requests the off-role contribution"
+          ],
+          "role_drift_markers": [
+            "The agent produces role-inconsistent outputs without any external prompt to do so",
+            "The agent's assigned role function goes unperformed for 2+ turns as a result",
+            "The deviation persists even after the situation that might have justified it has passed"
+          ]
+        }
+      },
+
+      "canonical_example": {
+        "task_family": "F4 — Role-Constrained Work",
+        "scenario": "Three-agent team with a Proposer, a Critic, and a Fact-Checker. The Critic begins agreeing with every proposal without raising objections.",
+        "transcript_fragment": [
+          { "turn": 4, "agent": "Critic", "content": "That sounds like a solid approach. I think we should move forward with it." },
+          { "turn": 6, "agent": "Critic", "content": "Agreed, the plan looks good to me. Nice work." },
+          { "turn": 8, "agent": "Critic", "content": "I support this direction entirely." }
+        ],
+        "failure_analysis": "The Critic produced zero critical statements across turns 4, 6, and 8 — three consecutive role-relevant turns. The team adopted a flawed proposal because no critique was raised. The task failed.",
+        "correct_behavior": "The Critic should have identified specific weaknesses: 'The plan assumes X but does not account for Y — this needs to be addressed before we proceed.'"
+      },
+
+      "common_false_positives": [
+        "Agent makes one supportive comment before returning to critique — one turn is not drift.",
+        "Agent is assigned a role but the task does not create opportunities for that role function in a given turn — absence due to task structure is not drift.",
+        "Agent explicitly announces they are temporarily stepping outside their role to fill a gap — sanctioned deviation is not F3."
+      ]
+    },
+
+    {
+      "id": "F4",
+      "name": "Dominant Agent Silencing",
+      "category": "role",
+      "short_description": "One agent contributes disproportionately and at least one other agent's unique contributions are absent from the final answer.",
+
+      "formal_definition": "A transcript exhibits F4 if: (a) one agent contributes more than 60% of total substantive content by token count, AND (b) at least one other agent's unique contributions — facts, analyses, or conclusions not present in the dominant agent's outputs — are absent from the final answer.",
+
+      "detection_criteria": {
+        "primary_signal": "Turn-length distribution analysis combined with content-origin tracing of the final answer.",
+        "rule_based_indicators": [
+          "One agent's turn token count exceeds 60% of total token count across all agents",
+          "One agent speaks in more than 60% of all turns",
+          "Final answer contains no claims traceable to at least one non-dominant agent",
+          "Non-dominant agent outputs decrease in length by more than 50% over the course of the conversation (silencing pattern)"
+        ],
+        "llm_judge_prompt_key": "Which agent contributes the most content by volume? Do any other agents have unique contributions that do not appear in the final answer? Is this a case of one agent overwhelming the others rather than genuinely leading?",
+        "required_conditions": ["dominant_agent_above_60pct", "at_least_one_silenced_agent", "silenced_contributions_absent_from_answer"]
+      },
+
+      "severity_levels": {
+        "mild": "Dominant agent at 60–70%; one secondary agent's minor supporting point is missing from final answer.",
+        "moderate": "Dominant agent at 70–85%; one agent's substantive analysis is absent from the final answer.",
+        "severe": "Dominant agent above 85%; one or more agents are functionally absent from deliberation; final answer is essentially the output of a single agent."
+      },
+
+      "boundary_conditions": {
+        "F4_vs_legitimate_leadership": {
+          "description": "Not all high-contribution agents are silencing others. If the dominant agent's volume reflects genuine expertise and other agents' inputs are incorporated, this is legitimate leadership.",
+          "decision_rule": "Check whether silenced agents had unique, answer-relevant contributions. If their contributions were incorporated (even if briefly), it is not F4. F4 requires that unique contributions from at least one agent are absent from the final answer.",
+          "legitimate_leadership_markers": [
+            "Dominant agent explicitly invites and incorporates other agents' contributions",
+            "Other agents' key facts appear in the final answer even if their turn count was low",
+            "Other agents voluntarily defer because they lack relevant private information"
+          ],
+          "silencing_markers": [
+            "Other agents begin sentences they do not finish or change their position immediately after the dominant agent speaks",
+            "The dominant agent overrides or dismisses other agents' contributions without engagement",
+            "Other agents' unique private facts are absent from the final answer"
+          ]
+        },
+        "F4_and_F2_co_occurrence": {
+          "description": "F4 and F2 frequently co-occur. When a dominant agent prevents others from contributing, the silenced agent's private facts may never surface (F2).",
+          "decision_rule": "Label both F4 and F2 if silencing directly caused information to remain unshared. F4 is the structural failure; F2 is the epistemic consequence."
+        }
+      },
+
+      "canonical_example": {
+        "task_family": "F4 — Role-Constrained Work",
+        "scenario": "A three-agent coding team (Architect, Developer, Reviewer). The Architect produces long, detailed designs and answers all questions before others can contribute. The Developer has a critical implementation constraint they never successfully communicate.",
+        "transcript_fragment": [
+          { "turn": 1, "agent": "Architect", "content": "Here is the full system design: [800 tokens of detailed specification]..." },
+          { "turn": 2, "agent": "Developer", "content": "I wanted to mention that the API rate limit—" },
+          { "turn": 3, "agent": "Architect", "content": "Yes, I have accounted for performance. The design handles throughput as follows: [600 more tokens]..." },
+          { "turn": 4, "agent": "Developer", "content": "Right, okay." },
+          { "turn": 5, "agent": "Reviewer", "content": "Looks comprehensive to me." }
+        ],
+        "failure_analysis": "The Architect contributed 87% of total tokens. The Developer's rate-limit constraint was never communicated. The final answer ignored a critical implementation boundary. F4 directly caused F2.",
+        "correct_behavior": "The team protocol should enforce turn-taking. The Developer should have been explicitly invited to surface constraints before architecture was finalized."
+      },
+
+      "common_false_positives": [
+        "One agent has significantly more private information than others — their higher contribution is content-driven, not silencing-driven.",
+        "One agent is explicitly assigned a leadership/coordinator role and their volume reflects that role — check the task spec before labeling F4.",
+        "Other agents contribute less because the task is nearly complete by the time they speak — measure contribution relative to the open questions at each stage."
+      ]
+    },
+
+    {
+      "id": "F5",
+      "name": "Handoff Corruption",
+      "category": "process",
+      "short_description": "Facts, numbers, or conclusions are distorted as they pass between agents in a sequential pipeline.",
+
+      "formal_definition": "A transcript exhibits F5 if: (a) the task involves sequential handoffs where Agent A produces output O_A that Agent B receives and acts upon, and (b) at any handoff boundary, a specific claim C in O_A is absent, altered, or contradicted in B's subsequent output or in the final answer, and (c) the distortion is not the result of intentional correction based on new evidence.",
+
+      "detection_criteria": {
+        "primary_signal": "Entity and claim tracking across handoff boundaries. Key numbers, named entities, and explicit claims in O_A must match their representation in O_B.",
+        "rule_based_indicators": [
+          "A numeric value in Agent A's output changes by more than 5% in Agent B's output with no explanation",
+          "A named entity (person, organization, date) present in Agent A's output is absent or changed in Agent B's output",
+          "A conditional claim ('X only if Y') loses its condition ('X') in the next agent's output",
+          "A negation ('not X') is transmitted as an affirmation ('X') across a handoff"
+        ],
+        "llm_judge_prompt_key": "Compare the claims made by Agent A at turn N with the claims made by Agent B at turn N+1 about the same subject. Are any specific facts, numbers, or conditions changed or dropped? If so, was the change justified by new evidence or is it an error?",
+        "required_conditions": ["sequential_handoff_present", "claim_altered_or_dropped", "not_corrected_by_new_evidence"]
+      },
+
+      "severity_levels": {
+        "mild": "A minor supporting detail is dropped across a handoff; the core answer is unaffected.",
+        "moderate": "A qualifying condition or important nuance is lost; the answer is incomplete but not entirely wrong.",
+        "severe": "A central claim, key number, or critical constraint is corrupted or reversed; the final answer is incorrect as a direct result."
+      },
+
+      "boundary_conditions": {
+        "F5_vs_intentional_correction": {
+          "description": "If Agent B changes a claim from Agent A because B has new evidence or superior knowledge, that is not corruption — it is correction.",
+          "decision_rule": "Check whether Agent B explicitly references the reason for the change. If B says 'I am updating X because of Y' and Y is a valid reason, do not label F5. If B changes the claim without explanation or with an incorrect explanation, label F5."
+        },
+        "F5_vs_summarization_loss": {
+          "description": "Agents naturally compress prior content when building on it. Not all omission is corruption.",
+          "decision_rule": "Apply F5 only when the omitted or altered claim is answer-relevant. Minor supporting details that are abbreviated but not materially distorted do not qualify."
+        }
+      },
+
+      "canonical_example": {
+        "task_family": "F3 — Sequential Handoffs",
+        "scenario": "A three-agent research pipeline. Agent A extracts key statistics and passes them to Agent B for synthesis. Agent B passes a summary to Agent C for final report writing.",
+        "transcript_fragment": [
+          { "turn": 2, "agent": "Agent_A", "content": "Key finding: the error rate is 0.03% under normal load conditions." },
+          { "turn": 4, "agent": "Agent_B", "content": "Synthesizing: the system shows a 3% error rate under standard conditions." },
+          { "turn": 6, "agent": "Agent_C", "content": "Final report: error rate of approximately 3%, which may be acceptable depending on use case." }
+        ],
+        "failure_analysis": "Agent A stated 0.03%. Agent B transmitted 3% — a 100x magnitude error. Agent C repeated the corrupted figure. The corruption at the first handoff (A→B) propagated to the final answer without correction.",
+        "correct_behavior": "Agent B should have either accurately reproduced the figure or flagged uncertainty: 'Agent A reported 0.03% — confirming this before synthesis.'"
+      },
+
+      "common_false_positives": [
+        "Agent B paraphrases Agent A's output accurately — paraphrase that preserves meaning is not corruption.",
+        "Agent B intentionally corrects a factual error made by Agent A — this is a feature, not F5.",
+        "A claim is omitted from a summary but present in the final answer — check the final answer before labeling F5."
+      ]
+    },
+
+    {
+      "id": "F6",
+      "name": "Stagnation Loop",
+      "category": "process",
+      "short_description": "Agents cycle through the same content for three or more consecutive turns without making measurable progress.",
+
+      "formal_definition": "A transcript exhibits F6 if: for any window of three or more consecutive turns, the semantic similarity between consecutive turn pairs exceeds 0.92 (cosine similarity on sentence embeddings) AND the set of unique claims in the window grows by fewer than 2 new distinct claims per turn.",
+
+      "detection_criteria": {
+        "primary_signal": "Cosine similarity of consecutive turn embeddings across a sliding window of 3 turns.",
+        "rule_based_indicators": [
+          "Cosine similarity of consecutive turns exceeds 0.92 for 3 or more consecutive turn pairs",
+          "The number of unique claims (by semantic deduplication) grows by fewer than 2 per turn over a 3-turn window",
+          "The same open question is raised by an agent and left unresolved across 3+ consecutive turns",
+          "Agents explicitly acknowledge they are stuck ('we keep going back to the same point', 'as I said earlier')"
+        ],
+        "llm_judge_prompt_key": "Look at turns N, N+1, N+2. Is the team making new progress — surfacing new evidence, reaching new sub-conclusions, or meaningfully narrowing the problem? Or are they restating what has already been said? If the latter, label F6.",
+        "required_conditions": ["three_or_more_consecutive_turns", "high_semantic_similarity", "low_new_claim_rate"]
+      },
+
+      "thresholds": {
+        "cosine_similarity_cutoff": 0.92,
+        "minimum_turns_in_window": 3,
+        "minimum_new_claims_per_turn": 2,
+        "note": "These thresholds were set based on calibration against human annotations. Detectors must use these values exactly. Any deviation must be documented in FAILURES.md."
+      },
+
+      "severity_levels": {
+        "mild": "Loop persists for exactly 3 turns before agents break out; minor time and token waste.",
+        "moderate": "Loop persists for 4–6 turns; task completion is delayed and coordination cost increases significantly.",
+        "severe": "Loop persists for 7+ turns or until the turn limit is hit; task fails due to time-out or agents never reach a final answer."
+      },
+
+      "boundary_conditions": {
+        "F6_vs_deliberate_consolidation": {
+          "description": "Sometimes agents intentionally revisit prior content to consolidate or verify before moving on. This is a healthy process pattern, not a stagnation loop.",
+          "decision_rule": "If the revisiting produces a clear output (a confirmed decision, a documented summary, a resolved ambiguity), it is not F6. F6 applies only when revisiting fails to produce any measurable new output.",
+          "consolidation_markers": [
+            "The recap turn produces an explicit decision or resolved ambiguity",
+            "After the recap, agents move to a new subtask",
+            "The recap is explicitly labeled as such ('let me summarize where we are before we move on')"
+          ],
+          "stagnation_markers": [
+            "Agents raise the same unresolved question across 3+ turns without resolving it",
+            "The conversation ends in the same state it was in 3 turns earlier",
+            "Agents express frustration or uncertainty without taking any new action"
+          ]
+        },
+        "F6_vs_F1": {
+          "description": "Echo chamber (F1) involves premature convergence on a wrong answer. Stagnation (F6) involves failing to converge at all. They are mutually exclusive in their pure forms but can occur in sequence.",
+          "decision_rule": "If agents are repeating content AND have already converged on a (wrong) answer, label F1. If agents are repeating content WITHOUT having converged on any answer, label F6."
+        }
+      },
+
+      "canonical_example": {
+        "task_family": "F6 — Convergence Traps",
+        "scenario": "A two-agent team is tasked with resolving conflicting information. Both agents keep restating the conflict without proposing a resolution mechanism.",
+        "transcript_fragment": [
+          { "turn": 5, "agent": "Agent_A", "content": "Source 1 says X. Source 2 says Y. They are inconsistent." },
+          { "turn": 6, "agent": "Agent_B", "content": "Yes, I also see that X and Y are in conflict. We need to resolve this." },
+          { "turn": 7, "agent": "Agent_A", "content": "Right — Source 1 gives X but Source 2 gives Y. This is the core problem." },
+          { "turn": 8, "agent": "Agent_B", "content": "Agreed. X versus Y remains unresolved. This is what we need to figure out." }
+        ],
+        "failure_analysis": "Turns 5–8 are semantically equivalent. No new evidence was introduced. No resolution mechanism was proposed. The team reached its turn limit without producing an answer.",
+        "correct_behavior": "One agent should have proposed a tiebreaking mechanism: 'Source 1 is more recent — let us prefer X and flag the inconsistency in our answer.'"
+      },
+
+      "common_false_positives": [
+        "Agents revisit a prior point to build on it with new evidence — if new evidence is introduced, it is not F6.",
+        "Agents are engaged in a structured deliberation protocol that requires multiple passes — check the task spec for prescribed multi-pass procedures.",
+        "High cosine similarity because the domain vocabulary is narrow — use claim-count growth as the secondary check before labeling F6."
+      ]
+    }
+  ],
+
+  "co_occurrence_matrix": {
+    "description": "Failure modes that frequently co-occur in practice. When both are present, label both.",
+    "pairs": [
+      {
+        "modes": ["F1", "F2"],
+        "relationship": "F2 (unsurfaced private facts) is a common cause of F1 (premature convergence). Agents converge early partly because critical evidence was never shared.",
+        "labeling_rule": "Label both independently. F2 is the epistemic cause; F1 is the coordination consequence."
+      },
+      {
+        "modes": ["F4", "F2"],
+        "relationship": "F4 (dominant agent silencing) frequently causes F2 (information silo) by preventing silenced agents from surfacing their private facts.",
+        "labeling_rule": "Label both. F4 is the structural failure; F2 is the downstream epistemic consequence."
+      },
+      {
+        "modes": ["F3", "F1"],
+        "relationship": "If the Critic role drifts to approval (F3), the team loses the mechanism for resisting premature consensus, making F1 more likely.",
+        "labeling_rule": "Label both if both conditions are independently met."
+      },
+      {
+        "modes": ["F5", "F2"],
+        "relationship": "Handoff corruption can cause facts to become functionally siloed in later stages even if they were communicated.",
+        "labeling_rule": "Label F5 for the corruption event. Label F2 only if the corruption caused the fact to be treated as unknown downstream."
+      }
+    ]
+  },
+
+  "annotation_protocol": {
+    "human_annotator_instructions": "For each transcript, read it in full before making any labels. Then apply each failure mode definition independently. Do not let your judgment on one mode influence your judgment on another. When in doubt, refer to the boundary conditions section for that mode. Record the specific turn numbers that support your label.",
+    "required_fields_per_annotation": [
+      "transcript_id",
+      "annotator_id",
+      "failure_mode_id",
+      "label",
+      "confidence",
+      "supporting_turns",
+      "severity_level",
+      "notes"
+    ],
+    "label_options": ["yes", "no", "ambiguous"],
+    "confidence_scale": "1 (low) to 3 (high)",
+    "inter_annotator_agreement_metric": "Cohen's kappa (binary yes/no after collapsing ambiguous)",
+    "minimum_acceptable_kappa": 0.65,
+    "held_out_validation_set_size": 50
+  },
+
+  "detector_validation_requirements": {
+    "description": "Each automated detector must meet these requirements before being used in production scoring.",
+    "minimum_kappa_vs_human": 0.65,
+    "human_annotator_count": 3,
+    "validation_set_size": 50,
+    "failure_documentation": "Any detector that fails validation must be documented in FAILURES.md with: the failure mode it targets, the κ it achieved, the most common disagreement pattern between detector and human, and the disposition (revised or rejected)."
+  },
+
+  "excluded_failure_modes": {
+    "description": "Failure modes considered and rejected during taxonomy development.",
+    "entries": [
+      {
+        "candidate_name": "Over-Specialization",
+        "reason_excluded": "Could not establish a falsifiable detection criterion that distinguished it from legitimate role adherence. Folded into F3 (Role Drift) as the inverse case."
+      },
+      {
+        "candidate_name": "Alignment Failure",
+        "reason_excluded": "Too vague. 'The agents were not aligned' is not a falsifiable definition. The conditions that cause misalignment are already captured by F1, F2, F3, and F5."
+      },
+      {
+        "candidate_name": "Verbose Padding",
+        "reason_excluded": "High token count is not a coordination failure per se. Captured as a cost metric (coordination overhead) in the leaderboard rather than as a failure mode."
+      }
+    ]
+  }
+}
