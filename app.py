@@ -19,3 +19,8 @@ st.subheader("Transcript")
 
 for msg in row["messages"]:
     st.write(msg)
+    
+# OPENAI_API_KEY=your_key
+# GEMINI_API_KEY=your_key
+# ANTHROPIC_API_KEY=your_key
+# MISTRAL_API_KEY=your_key
